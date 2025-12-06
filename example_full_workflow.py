@@ -176,6 +176,8 @@ def example_4_decision_history():
     print(f"Running 5 cycles for {ticker}...")
     for i in range(5):
         print(f"\nCycle {i+1}:")
+        # Get processed data first
+        market_agent.get_processed_data(analyze=True)
         market_message = market_agent.send_to_decision_agent(transport="direct")
         decision = decision_agent.receive_market_data(market_message)
         execution = execution_agent.receive_decision(decision)

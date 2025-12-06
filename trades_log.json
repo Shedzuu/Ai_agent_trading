@@ -8,5 +8,35 @@
     "commission": 0.27851121853637695,
     "timestamp": "2025-12-06T17:02:46.763457Z",
     "status": "executed"
+  },
+  {
+    "order_id": "ORD_20251207014612191069",
+    "ticker": "AAPL",
+    "action": "SELL",
+    "quantity": 1,
+    "executed_price": 278.51121853637693,
+    "commission": 0.27851121853637695,
+    "timestamp": "2025-12-07T01:46:12.191094Z",
+    "status": "executed"
+  },
+  {
+    "order_id": "ORD_20251207014615581644",
+    "ticker": "TSLA",
+    "action": "SELL",
+    "quantity": 1,
+    "executed_price": 454.48506243896486,
+    "commission": 0.45448506243896486,
+    "timestamp": "2025-12-07T01:46:15.581666Z",
+    "status": "executed"
+  },
+  {
+    "order_id": "ORD_20251207014617860894",
+    "ticker": "AAPL",
+    "action": "SELL",
+    "quantity": 1,
+    "executed_price": 278.51121853637693,
+    "commission": 0.27851121853637695,
+    "timestamp": "2025-12-07T01:46:17.860918Z",
+    "status": "executed"
   }
 ]

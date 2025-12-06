@@ -49,25 +49,34 @@ class DecisionMakingAgent:
         min_confidence: float = 0.6,  # Minimum confidence for action
         enable_ai: bool = True,
         model_path: Optional[str] = None,
-        history_size: int = 1000
+        history_size: int = 1000,
+        use_historical_training: bool = True,  # Use real historical data for training
+        training_ticker: Optional[str] = None,  # Ticker for historical training
+        training_period: str = "1y"  # Period for historical training data
     ):
         """
         Initialize decision-making agent.
         
         Args:
             model_type: Type of AI model ("random_forest", "gradient_boosting", "rule_based")
-            risk_tolerance: Risk tolerance level
+            risk_tolerance: Risk tolerance level ("low", "medium", "high")
             max_position_size: Maximum position size as fraction of portfolio
             min_confidence: Minimum confidence threshold for taking action
             enable_ai: Whether to use AI model (if False, uses rule-based)
             model_path: Path to saved model (if None, trains new model)
             history_size: Size of decision history
+            use_historical_training: If True, train on real historical data (default: True)
+            training_ticker: Ticker for historical training data (default: "SPY")
+            training_period: Period for historical training ("1y", "6mo", "3mo", "1mo")
         """
         self.model_type = model_type
         self.risk_tolerance = risk_tolerance
         self.max_position_size = max_position_size
         self.min_confidence = min_confidence
         self.enable_ai = enable_ai and SKLEARN_AVAILABLE
+        self.use_historical_training = use_historical_training
+        self.training_ticker = training_ticker
+        self.training_period = training_period
         
         # AI Model
         self.model = None
@@ -457,39 +466,28 @@ class DecisionMakingAgent:
         }
     
     def _train_initial_model(self):
-        """Train initial AI model using synthetic data based on rules."""
+        """Train initial AI model using historical or synthetic data."""
         if not self.enable_ai:
             return
         
         logger.info("Training initial AI model...")
         
-        # Generate synthetic training data based on rules
-        n_samples = 1000
-        X = []
-        y = []
-        
-        for _ in range(n_samples):
-            # Generate random features
-            features = np.random.rand(1, 14)[0]
-            
-            # Apply rule-based logic to generate labels
-            trend = features[9]  # Trend feature
-            rsi = features[5] * 100  # RSI (0-100)
-            macd_hist = features[7]  # MACD histogram
-            
-            # Rule-based label
-            if trend > 0.3 and rsi < 40 and macd_hist > 0:
-                label = 2  # BUY
-            elif trend < -0.3 and rsi > 60 and macd_hist < 0:
-                label = 0  # SELL
-            else:
-                label = 1  # HOLD
-            
-            X.append(features)
-            y.append(label)
-        
-        X = np.array(X)
-        y = np.array(y)
+        # Try to use historical data if enabled
+        if self.use_historical_training:
+            try:
+                logger.info("Attempting to train on real historical data...")
+                X, y = self._prepare_historical_training_data()
+                if X is not None and len(X) > 100:  # Need at least 100 samples
+                    logger.info(f"Using {len(X)} historical samples for training")
+                else:
+                    logger.warning("Not enough historical data, falling back to synthetic data")
+                    X, y = self._prepare_synthetic_training_data()
+            except Exception as e:
+                logger.warning(f"Error preparing historical data: {e}. Using synthetic data.")
+                X, y = self._prepare_synthetic_training_data()
+        else:
+            logger.info("Using synthetic training data")
+            X, y = self._prepare_synthetic_training_data()
         
         # Split data
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -519,6 +517,168 @@ class DecisionMakingAgent:
         # Save model if path provided
         if self.model_path:
             self._save_model(self.model_path)
+    
+    def _prepare_historical_training_data(self) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Prepare training data from real historical market data.
+        
+        Returns:
+            Tuple of (features, labels) arrays
+        """
+        try:
+            from agents.market_monitor import MarketMonitoringAgent
+            
+            # Use provided ticker or default to SPY (broad market index)
+            ticker = self.training_ticker or "SPY"
+            
+            logger.info(f"Fetching historical data for {ticker} (period: {self.training_period})")
+            
+            # Get historical data
+            market_agent = MarketMonitoringAgent(
+                ticker=ticker,
+                interval="1d",  # Daily data for training
+                period=self.training_period,
+                enable_cache=True
+            )
+            
+            # Get processed data with indicators
+            data = market_agent.get_processed_data(analyze=False)
+            
+            if data.empty or len(data) < 50:
+                logger.warning(f"Insufficient historical data: {len(data)} records")
+                return None, None
+            
+            # Prepare features and labels
+            X = []
+            y = []
+            
+            # For each day, extract features and determine label based on future price movement
+            for i in range(len(data) - 1):
+                current_row = data.iloc[i]
+                next_row = data.iloc[i + 1]
+                
+                # Extract features (same as _extract_features but from DataFrame row)
+                features = []
+                
+                # Price features
+                features.append(float(current_row.get('close', 0.0)))
+                features.append(float(current_row.get('volume', 0.0)))
+                features.append(float(current_row.get('price_change', 0.0)))
+                
+                # Technical indicators
+                features.append(float(current_row.get('sma10', 0.0)))
+                features.append(float(current_row.get('sma20', 0.0)))
+                features.append(float(current_row.get('rsi14', 50.0)))
+                features.append(float(current_row.get('macd', 0.0)))
+                features.append(float(current_row.get('macd_hist', 0.0)))
+                features.append(float(current_row.get('volatility', 0.0)))
+                
+                # Analysis features (need to compute)
+                sma10 = current_row.get('sma10', 0.0)
+                sma20 = current_row.get('sma20', 0.0)
+                if sma10 > sma20:
+                    trend_encoded = 1.0  # bull
+                elif sma10 < sma20:
+                    trend_encoded = -1.0  # bear
+                else:
+                    trend_encoded = 0.0  # sideways
+                features.append(trend_encoded)
+                
+                # Strength (based on RSI distance from 50)
+                rsi = current_row.get('rsi14', 50.0)
+                strength = abs(rsi - 50) / 50
+                features.append(float(strength))
+                
+                # RSI state
+                if rsi > 70:
+                    rsi_encoded = 1.0  # overbought
+                elif rsi < 30:
+                    rsi_encoded = -1.0  # oversold
+                else:
+                    rsi_encoded = 0.0  # neutral
+                features.append(rsi_encoded)
+                
+                # SMA crossover (simplified)
+                sma_cross = 0.0
+                if i > 0:
+                    prev_row = data.iloc[i - 1]
+                    prev_sma10 = prev_row.get('sma10', 0.0)
+                    prev_sma20 = prev_row.get('sma20', 0.0)
+                    if (prev_sma10 <= prev_sma20 and sma10 > sma20) or \
+                       (prev_sma10 >= prev_sma20 and sma10 < sma20):
+                        sma_cross = 1.0
+                features.append(sma_cross)
+                
+                # Determine label based on future price movement
+                current_price = current_row.get('close', 0.0)
+                next_price = next_row.get('close', 0.0)
+                
+                if current_price > 0:
+                    price_change_pct = ((next_price - current_price) / current_price) * 100
+                    
+                    # Label: 0=SELL, 1=HOLD, 2=BUY
+                    # Based on future return and current indicators
+                    if price_change_pct > 1.0 and rsi < 60:  # Price goes up, not overbought
+                        label = 2  # BUY
+                    elif price_change_pct < -1.0 and rsi > 40:  # Price goes down, not oversold
+                        label = 0  # SELL
+                    else:
+                        label = 1  # HOLD
+                else:
+                    label = 1  # HOLD if no price data
+                
+                X.append(features)
+                y.append(label)
+            
+            X = np.array(X)
+            y = np.array(y)
+            
+            logger.info(f"Prepared {len(X)} training samples from historical data")
+            logger.info(f"Label distribution: BUY={np.sum(y==2)}, HOLD={np.sum(y==1)}, SELL={np.sum(y==0)}")
+            
+            return X, y
+            
+        except Exception as e:
+            logger.error(f"Error preparing historical training data: {e}")
+            return None, None
+    
+    def _prepare_synthetic_training_data(self) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Prepare synthetic training data based on rules.
+        
+        Returns:
+            Tuple of (features, labels) arrays
+        """
+        logger.info("Generating synthetic training data...")
+        
+        n_samples = 1000
+        X = []
+        y = []
+        
+        for _ in range(n_samples):
+            # Generate random features
+            features = np.random.rand(1, 14)[0]
+            
+            # Apply rule-based logic to generate labels
+            trend = features[9]  # Trend feature
+            rsi = features[5] * 100  # RSI (0-100)
+            macd_hist = features[7]  # MACD histogram
+            
+            # Rule-based label
+            if trend > 0.3 and rsi < 40 and macd_hist > 0:
+                label = 2  # BUY
+            elif trend < -0.3 and rsi > 60 and macd_hist < 0:
+                label = 0  # SELL
+            else:
+                label = 1  # HOLD
+            
+            X.append(features)
+            y.append(label)
+        
+        X = np.array(X)
+        y = np.array(y)
+        
+        return X, y
     
     def _save_model(self, path: str):
         """Save trained model to disk."""
